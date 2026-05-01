@@ -4,6 +4,8 @@ import networkx as nx
 import osmnx as ox
 import json
 
+from networkx import Graph
+
 from Customer import Customer
 from Depot import Depot
 from Population import Individual, Population
@@ -33,16 +35,10 @@ class VrpGe:
         self.vehicle_properties['capacity'] = data['vehicles']['capacity']
         print(f"Num of nodes: {len(self.nodes)}")
 
-    @staticmethod
-    def _uv(e):
-        t = tuple(e)
-        if len(t) != 2:
-            return None
-        return t[0], t[1]
 
     def eax(self, parent_a: Individual, parent_b: Individual):
-        edges_a = self._get_edge_set(parent_a)
-        edges_b = self._get_edge_set(parent_b)
+        edges_a = parent_a.get_edges()
+        edges_b = parent_b.get_edges()
 
         ab_cycles = self._find_ab_cycles(edges_a, edges_b)
 
@@ -50,93 +46,67 @@ class VrpGe:
             return copy.deepcopy(parent_a)
 
         child_edges = self._edge_exchange(edges_a, edges_b, ab_cycles)
-        child_edges = self._fix_degree(child_edges)
-        child_edges = self._break_cycles(child_edges)
-        child_edges = self._reconnect(child_edges)
-        return self._edges_to_individual(child_edges, parent_a)
-    def _get_edge_set(self, individual: Individual) -> set:
-        edges = set()
-        for route in individual.routes:
-            if not route:
-                continue
-            prev = 0
-            for node in route:
-                if prev != node:
-                    edges.add(frozenset({prev, node}))
-                prev = node
-            if prev != 0:
-                edges.add(frozenset({prev, 0}))
-        return edges
+        G = self._fix_degree(child_edges,edges_a)
+        G = self._break_cycles(G)
+        G = self._reconnect(G,edges_a)
+
+        ind = Individual([],0)
+        ind.getIndividualFromGraph(G,len(self.nodes)-1)
+        return ind
 
     def _find_ab_cycles(self, edges_a: set, edges_b: set) -> list:
-        only_a = edges_a - edges_b
-        only_b = edges_b - edges_a
+        new_edges = edges_a ^ edges_b
 
-        if not only_a or not only_b:
-            return []
-
-        G = nx.MultiGraph()
-        for e in only_a:
-            uv = self._uv(e)
-            if uv:
-                G.add_edge(uv[0], uv[1], owner='A')
-        for e in only_b:
-            uv = self._uv(e)
-            if uv:
-                G.add_edge(uv[0], uv[1], owner='B')
+        G = nx.Graph()
+        for u, v in new_edges:
+            parent = 'A' if (u, v) in edges_a or (v, u) in edges_a else 'B'
+            G.add_edge(u, v, belongs=parent)
 
         ab_cycles = []
-        visited_edges = set()
 
-        for start in list(G.nodes()):
-            while True:
-                a_edge = None
-                for nbr, key_dict in G.adj[start].items():
-                    for key, data in key_dict.items():
-                        eid = (min(start, nbr), max(start, nbr), key)
-                        if data['owner'] == 'A' and eid not in visited_edges:
-                            a_edge = (start, nbr, key)
-                            break
-                    if a_edge:
-                        break
+        visited_edges = {}
+        for u, v, data in G.edges(data=True):
+            p = data['belongs']
+            edge_key = tuple(sorted((u, v))) + (p,)
+            visited_edges[edge_key] = False
 
-                if not a_edge:
+        for start_node in list(G.nodes):
+            first_edge_key = None
+            for neighbor in G.neighbors(start_node):
+                p = G[start_node][neighbor]['belongs']
+                key = tuple(sorted((start_node, neighbor))) + (p,)
+                if p == 'A' and not visited_edges[key]:
+                    first_edge_key = key
                     break
 
-                cycle_edges = []
-                current = start
-                target_owner = 'A'
-                stuck = False
+            if first_edge_key is None:
+                continue
 
-                while True:
-                    found = None
-                    for nbr, key_dict in G.adj[current].items():
-                        for key, data in key_dict.items():
-                            eid = (min(current, nbr), max(current, nbr), key)
-                            if data['owner'] == target_owner and eid not in visited_edges:
-                                found = (current, nbr, key, data['owner'])
-                                break
-                        if found:
-                            break
+            current_cycle = []
+            current_node = start_node
+            next_parent = 'A'
 
-                    if not found:
-                        stuck = True
+            while True:
+                found_next = None
+                for neighbor in G.neighbors(current_node):
+                    p = G[current_node][neighbor]['belongs']
+                    key = tuple(sorted((current_node, neighbor))) + (p,)
+
+                    if p == next_parent and not visited_edges[key]:
+                        found_next = neighbor
+                        visited_edges[key] = True
+                        current_cycle.append((current_node, neighbor, p))
                         break
 
-                    u, v, key, owner = found
-                    eid = (min(u, v), max(u, v), key)
-                    visited_edges.add(eid)
-                    cycle_edges.append((u, v, owner))
-                    current = v
-                    target_owner = 'B' if target_owner == 'A' else 'A'
+                if found_next is None:
+                    break
 
-                    if current == start and target_owner == 'A':
-                        ab_cycles.append(cycle_edges)
-                        break
+                current_node = found_next
+                next_parent = 'B' if next_parent == 'A' else 'A'
 
-                if stuck:
-                    u, v, key = a_edge
-                    visited_edges.add((min(u, v), max(u, v), key))
+                if current_node == start_node:
+                    ab_cycles.append(current_cycle)
+                    break
 
         return ab_cycles
 
@@ -146,7 +116,7 @@ class VrpGe:
         chosen_cycle = random.choice(ab_cycles)
 
         for u, v, owner in chosen_cycle:
-            edge = frozenset({u, v})
+            edge = (u,v)
             if owner == 'A':
                 child_edges.discard(edge)
             else:
@@ -154,161 +124,91 @@ class VrpGe:
 
         return child_edges
 
-    def _fix_degree(self, edges: set) -> set:
-        while True:
-            loops = {e for e in edges if self._uv(e) is None}
-            if loops:
-                edges -= loops
-                continue
-            degree = {}
-            for e in edges:
-                u, v = self._uv(e)
-                degree[u] = degree.get(u, 0) + 1
-                degree[v] = degree.get(v, 0) + 1
+    def _fix_degree(self, child_edges: set,edges_a : set):
 
-            bad_nodes = [n for n, d in degree.items() if d > 2]
-            if not bad_nodes:
-                break
-
-            node = bad_nodes[0]
-            incident = [e for e in edges if node in e]
-
-            def edge_dist(e):
-                uv = self._uv(e)
-                if uv and self.graph.has_edge(uv[0], uv[1]):
-                    return self.graph[uv[0]][uv[1]]['distance']
-                return 0.0
-
-            worst = max(incident, key=edge_dist)
-            edges.discard(worst)
-
-        return edges
-
-    def _break_cycles(self, edges: set) -> set:
         G = nx.Graph()
-        for e in edges:
-            uv = self._uv(e)
-            if uv:
-                G.add_edge(uv[0], uv[1])
-
-        def edge_dist(u, v):
-            if self.graph.has_edge(u, v):
-                return self.graph[u][v]['distance']
-            return 0.0
-
-        for comp in list(nx.connected_components(G)):
-            sub = G.subgraph(comp)
-            if all(sub.degree(n) >= 2 for n in comp):
-                worst = max(sub.edges(), key=lambda e: edge_dist(e[0], e[1]))
-                edges.discard(frozenset(worst))
-
-        return edges
-
-    def _reconnect(self, edges: set) -> set:
-        def rebuild_graph():
-            G = nx.Graph()
-            for e in edges:
-                uv = self._uv(e)
-                if uv:
-                    G.add_edge(uv[0], uv[1])
-            for i in range(len(self.nodes)):
-                if i not in G:
-                    G.add_node(i)
-            return G
-
-        G = rebuild_graph()
-
-        while True:
-            comps = list(nx.connected_components(G))
-            if len(comps) <= 1:
-                break
-
-            comp_endpoints = []
-            for comp in comps:
-                endpoints = [n for n in comp if G.degree(n) <= 1]
-                if not endpoints:
-                    endpoints = list(comp)
-                comp_endpoints.append((comp, endpoints))
-
-            best, best_dist = None, float('inf')
-            for i in range(len(comp_endpoints)):
-                for j in range(i + 1, len(comp_endpoints)):
-                    for u in comp_endpoints[i][1]:
-                        for v in comp_endpoints[j][1]:
-                            if self.graph.has_edge(u, v):
-                                d = self.graph[u][v]['distance']
-                                if d < best_dist:
-                                    best_dist, best = d, (u, v)
-
-            if best is None:
-                for i in range(len(comp_endpoints)):
-                    for j in range(i + 1, len(comp_endpoints)):
-                        if comp_endpoints[i][1] and comp_endpoints[j][1]:
-                            best = (comp_endpoints[i][1][0], comp_endpoints[j][1][0])
-                            break
-                    if best:
-                        break
-                if best is None:
-                    break
-
-            u, v = best
-            edges.add(frozenset({u, v}))
-            edges = self._fix_degree(edges)
-            G = rebuild_graph()
-
-        return edges
-
-    def _edges_to_individual(self, edges: set, fallback: Individual) -> Individual:
-        G = nx.Graph()
-        for e in edges:
-            uv = self._uv(e)
-            if uv: G.add_edge(uv[0], uv[1])
-
-        if 0 not in G: G.add_node(0)
-
-        visited_nodes = {0}
-        all_routes = []
-
-        starts = list(G.neighbors(0))
-        for s in starts:
-            if s in visited_nodes:
-                continue
-
-            route = []
-            curr = s
-            prev = 0
-
-            while curr != 0 and curr not in visited_nodes:
-                visited_nodes.add(curr)
-                route.append(curr)
-
-                next_nodes = [n for n in G.neighbors(curr) if n != prev]
-                if not next_nodes:
-                    break
-
-                prev = curr
-                curr = next_nodes[0]
-
-            if route:
-                all_routes.append(route)
-
-        all_customer_ids = set(range(1, len(self.nodes)))
-        missing = all_customer_ids - visited_nodes
-
-        for node in missing:
-            if all_routes:
-                all_routes[0].append(node)
+        for u,v in child_edges:
+            edge = (u,v)
+            if edge in edges_a:
+                G.add_edge(u,v,belongsA=True)
             else:
-                all_routes.append([node])
+                G.add_edge(u,v,belongsA=False)
+        nodes_to_fix = [n for n, d in G.degree() if d > 2]
 
-        return Individual(routes=all_routes, fitness=0)
+        for current_node in nodes_to_fix:
+            while G.degree(current_node) > 2:
+                edges = []
+                for neigh in G.neighbors(current_node):
+                    is_a = G[current_node][neigh].get('belongsA', False)
+                    dist = self.graph[current_node][neigh]['distance']
+                    edges.append((neigh, is_a, dist))
+                edges.sort(key=lambda x: (x[1], x[2]), reverse=True)
+                neighbor_to_remove = edges[0][0]
+                G.remove_edge(current_node, neighbor_to_remove)
+
+        return G
+
+    def _break_cycles(self, G):
+        for component in list(nx.connected_components(G)):
+            subgraph = G.subgraph(component)
+            try:
+                cycle_edges = nx.find_cycle(subgraph)
+                max_dist = -1.0
+                edge_to_remove = None
+
+                for u, v in cycle_edges:
+                    dist = self.graph[u][v]['distance']
+                    if dist > max_dist:
+                        max_dist = dist
+                        edge_to_remove = (u, v)
+
+                if edge_to_remove:
+                    G.remove_edge(*edge_to_remove)
+
+            except nx.NetworkXNoCycle:
+                continue
+
+        return G
+
+
+    def _reconnect(self, G,edges_a):
+        while nx.number_connected_components(G) > 1:
+            components = list(nx.connected_components(G))
+            best_edge = None
+            min_dist = float('inf')
+
+            endpoints = [n for n, d in G.degree() if d <= 1]
+
+            for i in range(len(components)):
+                for j in range(i + 1, len(components)):
+                    comp_i = components[i]
+                    comp_j = components[j]
+
+                    nodes_i = [n for n in comp_i if n in endpoints]
+                    nodes_j = [n for n in comp_j if n in endpoints]
+
+                    for n1 in nodes_i:
+                        for n2 in nodes_j:
+                            dist = self.graph[n1][n2]['distance']
+
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_edge = (n1, n2)
+
+            if best_edge:
+                u, v = best_edge
+                G.add_edge(u, v, belongsA=False)
+            else:
+                break
+
+        return G
 
     def run(self, iterations):
         self.fillNodes()
         self.fillEdges()
 
-        pop_size = 200
-        self.population.init_population(pop_size, len(self.nodes) - 1, self.vehicle_properties['count'])
+        pop_size = 400
+        self.population.init_population(pop_size, len(self.nodes) - 1)
         for ind in self.population.population:
             ind.calculate_fitness(self.nodes, self.vehicle_properties, self.graph)
 
@@ -341,68 +241,44 @@ class VrpGe:
             else:
                 no_improve += 1
 
-            if no_improve >= 150:
-                self._restart_population()
-                no_improve = 0
-                print(f"  >> Restart populace v iteraci {current_iter}")
-
             if current_iter % 10 == 0:
                 print(f"Iterace {current_iter}: Best Fitness = {best_fitness:.2f}")
 
-        print(self.best_ind)
+        total_km = 0.0
+        route = self.best_ind.route
+
+        if len(route) > 0:
+            first_node = route[0]
+            total_km += self.graph[0][first_node]['distance']
+
+            for i in range(len(route) - 1):
+                u = route[i]
+                v = route[i+1]
+                total_km += self.graph[u][v]['distance']
+
+            last_node = route[-1]
+            total_km += self.graph[last_node][0]['distance']
+
+        total_m = total_km * 1000.0
+        print(f"{total_km:.2f} km ({total_m:.0f} m)")
+
 
     def _mutate(self, individual: Individual) -> Individual:
         child = copy.deepcopy(individual)
-        non_empty = [i for i, r in enumerate(child.routes) if len(r) >= 2]
-        if not non_empty:
-            return child
+
+        route = child.route
 
         if random.random() < 0.8:
-            idx = random.choice(non_empty)
-            route = child.routes[idx]
             i, j = sorted(random.sample(range(len(route)), 2))
             route[i:j + 1] = reversed(route[i:j + 1])
+
         else:
-            src = random.choice(non_empty)
-            others = [i for i in range(len(child.routes)) if i != src]
-            if others:
-                dst = random.choice(others)
-                cust = child.routes[src].pop(random.randrange(len(child.routes[src])))
-                child.routes[dst].insert(random.randrange(len(child.routes[dst]) + 1), cust)
+            idx_src = random.randrange(len(route))
+            cust = route.pop(idx_src)
+            idx_dst = random.randrange(len(route) + 1)
+            route.insert(idx_dst, cust)
 
         return child
-
-    def _restart_population(self):
-        self.population.population.sort(key=lambda x: x.fitness)
-        elite_n = max(5, len(self.population.population) // 10)
-        elite = self.population.population[:elite_n]
-
-        new_inds = []
-        n_cust = len(self.nodes) - 1
-        n_veh = self.vehicle_properties['count']
-        cap = self.vehicle_properties['capacity']
-
-        for _ in range(len(self.population.population) - elite_n):
-            perm = list(range(1, n_cust + 1))
-            random.shuffle(perm)
-            routes, cur, load = [], [], 0
-            for c in perm:
-                d = self.nodes[c].demand
-                if load + d > cap and cur:
-                    routes.append(cur)
-                    cur, load = [c], d
-                else:
-                    cur.append(c)
-                    load += d
-            if cur:
-                routes.append(cur)
-            while len(routes) < n_veh:
-                routes.append([])
-            ind = Individual(routes=routes[:n_veh], fitness=0)
-            ind.calculate_fitness(self.nodes, self.vehicle_properties, self.graph)
-            new_inds.append(ind)
-
-        self.population.population = elite + new_inds
 
 
     def get_parent(self):
