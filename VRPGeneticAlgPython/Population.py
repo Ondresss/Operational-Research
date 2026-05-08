@@ -50,49 +50,38 @@ class Individual:
 
     def calculate_fitness(self, nodes, vehicle_properties, graph):
         total_dist = 0.0
-        total_load_penalty = 0.0
-        total_time_penalty = 0.0
-        vehicle_usage_penalty = 0.0
-        VEHICLE_COST = 2000.0
-        OVERLIMIT_VEHICLE_PENALTY = 100000.0
-        W_TIME = 50.0
-
-        capacity_limit = vehicle_properties['capacity']
-        max_vehicles = vehicle_properties['count']
         used_vehicles = 1
-
-        current_time = 0.0
+        current_capacity = vehicle_properties['capacity']
         previous_customer = 0
-        for i in range(0,len(self.route)):
+
+        for i in range(len(self.route)):
             current_customer = self.route[i]
-            total_dist += graph[previous_customer][current_customer]['distance']
-            current_time += graph[previous_customer][current_customer]['travel_time']
+            customer_demand = nodes[current_customer].demand
 
-            customer = nodes[current_customer]
-            capacity_limit -= customer.demand
-            if (capacity_limit <= 0):
-                vehicle_usage_penalty += VEHICLE_COST
-                capacity_limit = vehicle_properties['capacity']
+            if current_capacity < customer_demand:
+
+                total_dist += graph[previous_customer][0]['distance']
+                total_dist += graph[0][current_customer]['distance']
+                current_capacity = vehicle_properties['capacity'] - customer_demand
                 used_vehicles += 1
+            else:
+                total_dist += graph[previous_customer][current_customer]['distance']
+                current_capacity -= customer_demand
 
-            if current_time < customer.start_time:
-                current_time = customer.start_time
-
-            if current_time > customer.end_time:
-                total_time_penalty += W_TIME
-
-            current_time += customer.service_time
             previous_customer = current_customer
+
         total_dist += graph[previous_customer][0]['distance']
 
-        vehicle_usage_penalty = used_vehicles * VEHICLE_COST
-        if (used_vehicles > max_vehicles):
-            vehicle_usage_penalty += (used_vehicles - max_vehicles) * OVERLIMIT_VEHICLE_PENALTY
-        distance_weight = 250.0
-        self.fitness = (total_dist * distance_weight +
-                        vehicle_usage_penalty +
-                        total_load_penalty +
-                        (total_time_penalty * W_TIME))
+
+        VEHICLE_COST = 2000.0
+        OVERLIMIT_PENALTY = 100000.0
+        max_vehicles = vehicle_properties['count']
+
+        vehicle_penalty = used_vehicles * VEHICLE_COST
+        if used_vehicles > max_vehicles:
+            vehicle_penalty += (used_vehicles - max_vehicles) * OVERLIMIT_PENALTY
+
+        self.fitness = total_dist + vehicle_penalty
 
 
     def __str__(self):
