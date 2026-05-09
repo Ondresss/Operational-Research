@@ -1,6 +1,11 @@
 from typing import List
+
+import networkx as nx
 import  numpy as np
 from Depot import  Depot
+from Customer import Customer
+
+
 class Individual:
     def __init__(self,route,fitness):
         self.route = route
@@ -17,71 +22,79 @@ class Individual:
         return edges
 
 
-    def getIndividualFromGraph(self, G,no_customers):
+    def getIndividualFromGraph(self, G, no_customers):
+        all_required = set(range(1, no_customers+1))
+
         xor_route = []
-        all_customers = list(range(1,no_customers))
-        if len(G.nodes) > 0:
-            start_nodes = [n for n, d in G.degree() if d == 1]
-            start_node = start_nodes[0] if start_nodes else list(G.nodes())[0]
+        visited_in_dfs = set()
+        for node in G.nodes:
+            if node not in visited_in_dfs:
+                comp_nodes = list(nx.dfs_preorder_nodes(G, source=node))
+                for n in comp_nodes:
+                    if n != 0 and n not in visited_in_dfs:
+                        xor_route.append(n)
+                        visited_in_dfs.add(n)
 
-            current_node = start_node
-            visited = {current_node}
-            xor_route.append(current_node)
-
-            while len(xor_route) < G.number_of_nodes():
-                next_node = None
-                for neighbor in G.neighbors(current_node):
-                    if neighbor not in visited:
-                        next_node = neighbor
-                        break
-
-                if next_node is not None:
-                    visited.add(next_node)
-                    xor_route.append(next_node)
-                    current_node = next_node
-                else:
-                    break
-
-        missing_nodes = [n for n in all_customers if n not in visited and n != 0]
-        final_tour = xor_route + missing_nodes
-        self.route = final_tour
-
+        already_in_route = set(xor_route)
+        missing = [n for n in all_required if n not in already_in_route]
+        if missing:
+            xor_route.extend(missing)
+        self.route = xor_route
 
 
     def calculate_fitness(self, nodes, vehicle_properties, graph):
         total_dist = 0.0
+        time_penalty = 0.0
         used_vehicles = 1
-        current_capacity = vehicle_properties['capacity']
+
+        TIME_WINDOW_PENALTY = 2000.0
+        VEHICLE_COST = 50000.0
+        OVERLIMIT_PENALTY = 10000000.0
+
+        capacity = vehicle_properties['capacity']
+        current_capacity = capacity
+        current_time = nodes[0].start_time
         previous_customer = 0
 
-        for i in range(len(self.route)):
-            current_customer = self.route[i]
-            customer_demand = nodes[current_customer].demand
+        for customer_idx in self.route:
+            customer = nodes[customer_idx]
 
-            if current_capacity < customer_demand:
+            travel_dist = graph[previous_customer][customer_idx]['distance']
+            travel_time = graph[previous_customer][customer_idx]['travel_time']
 
+            if current_capacity < customer.demand:
                 total_dist += graph[previous_customer][0]['distance']
-                total_dist += graph[0][current_customer]['distance']
-                current_capacity = vehicle_properties['capacity'] - customer_demand
                 used_vehicles += 1
-            else:
-                total_dist += graph[previous_customer][current_customer]['distance']
-                current_capacity -= customer_demand
+                current_capacity = capacity
 
-            previous_customer = current_customer
+                previous_customer = 0
+                current_time = nodes[0].start_time
+
+            current_capacity -= customer.demand
+            total_dist += travel_dist
+            current_time += travel_time
+
+            if current_time < customer.start_time:
+                current_time = customer.start_time
+            elif current_time > customer.end_time:
+                time_penalty += (current_time - customer.end_time) * TIME_WINDOW_PENALTY
+
+            current_time += customer.service_time
+            previous_customer = customer_idx
 
         total_dist += graph[previous_customer][0]['distance']
+        current_time += graph[previous_customer][0]['travel_time']
 
+        depot = nodes[0]
+        if current_time > depot.end_time:
+            time_penalty += (current_time - depot.end_time) * TIME_WINDOW_PENALTY
 
-        VEHICLE_COST = 2000.0
-        OVERLIMIT_PENALTY = 100000.0
         max_vehicles = vehicle_properties['count']
-
         vehicle_penalty = used_vehicles * VEHICLE_COST
         if used_vehicles > max_vehicles:
             vehicle_penalty += (used_vehicles - max_vehicles) * OVERLIMIT_PENALTY
 
-        self.fitness = total_dist + vehicle_penalty
+        self.fitness = total_dist + vehicle_penalty + time_penalty
 
 
     def __str__(self):
@@ -95,7 +108,7 @@ class Population:
     def __init__(self):
         self.population : List[Individual] = []
     def create_random_individual(self,num_customers):
-        random_route = list(range(1,num_customers))
+        random_route = list(range(1,num_customers+1))
         np.random.shuffle(random_route)
         return Individual(random_route,0)
 

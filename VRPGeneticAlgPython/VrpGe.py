@@ -41,7 +41,6 @@ class VrpGe:
         edges_b = parent_b.get_edges()
 
         ab_cycles = self._find_ab_cycles(edges_a, edges_b)
-
         if not ab_cycles:
             return copy.deepcopy(parent_a)
 
@@ -56,58 +55,47 @@ class VrpGe:
 
     def _find_ab_cycles(self, edges_a: set, edges_b: set) -> list:
         new_edges = edges_a ^ edges_b
-
         G = nx.Graph()
         for u, v in new_edges:
             parent = 'A' if (u, v) in edges_a or (v, u) in edges_a else 'B'
-            G.add_edge(u, v, belongs=parent)
+            G.add_edge(u, v, belongs=parent, visited=False)
 
         ab_cycles = []
 
-        visited_edges = {}
-        for u, v, data in G.edges(data=True):
-            p = data['belongs']
-            edge_key = tuple(sorted((u, v))) + (p,)
-            visited_edges[edge_key] = False
-
         for start_node in list(G.nodes):
-            first_edge_key = None
-            for neighbor in G.neighbors(start_node):
-                p = G[start_node][neighbor]['belongs']
-                key = tuple(sorted((start_node, neighbor))) + (p,)
-                if p == 'A' and not visited_edges[key]:
-                    first_edge_key = key
-                    break
-
-            if first_edge_key is None:
-                continue
-
-            current_cycle = []
-            current_node = start_node
-            next_parent = 'A'
-
             while True:
-                found_next = None
-                for neighbor in G.neighbors(current_node):
-                    p = G[current_node][neighbor]['belongs']
-                    key = tuple(sorted((current_node, neighbor))) + (p,)
-
-                    if p == next_parent and not visited_edges[key]:
-                        found_next = neighbor
-                        visited_edges[key] = True
-                        current_cycle.append((current_node, neighbor, p))
+                has_available_a = False
+                for neighbor in G.neighbors(start_node):
+                    if G[start_node][neighbor]['belongs'] == 'A' and not G[start_node][neighbor]['visited']:
+                        has_available_a = True
                         break
 
-                if found_next is None:
+                if not has_available_a:
                     break
 
-                current_node = found_next
-                next_parent = 'B' if next_parent == 'A' else 'A'
+                current_cycle = []
+                current_node = start_node
+                next_parent = 'A'
 
-                if current_node == start_node:
-                    ab_cycles.append(current_cycle)
-                    break
+                while True:
+                    found_next = None
+                    for neighbor in G.neighbors(current_node):
+                        edge_data = G[current_node][neighbor]
+                        if edge_data['belongs'] == next_parent and not edge_data['visited']:
+                            found_next = neighbor
+                            edge_data['visited'] = True
+                            current_cycle.append((current_node, neighbor, next_parent))
+                            break
 
+                    if found_next is None:
+                        break
+
+                    current_node = found_next
+                    next_parent = 'B' if next_parent == 'A' else 'A'
+
+                    if current_node == start_node:
+                        ab_cycles.append(current_cycle)
+                        break
         return ab_cycles
 
 
@@ -171,21 +159,26 @@ class VrpGe:
         return G
 
 
-    def _reconnect(self, G,edges_a):
+    def _reconnect(self, G, edges_a):
         while nx.number_connected_components(G) > 1:
             components = list(nx.connected_components(G))
             best_edge = None
             min_dist = float('inf')
 
-            endpoints = [n for n, d in G.degree() if d <= 1]
+            comp_endpoints = []
+
+            for comp in components:
+                endpoints = [n for n in comp if G.degree(n) <= 1]
+
+                if not endpoints:
+                    endpoints = list(comp)
+
+                comp_endpoints.append(endpoints)
 
             for i in range(len(components)):
                 for j in range(i + 1, len(components)):
-                    comp_i = components[i]
-                    comp_j = components[j]
-
-                    nodes_i = [n for n in comp_i if n in endpoints]
-                    nodes_j = [n for n in comp_j if n in endpoints]
+                    nodes_i = comp_endpoints[i]
+                    nodes_j = comp_endpoints[j]
 
                     for n1 in nodes_i:
                         for n2 in nodes_j:
@@ -197,7 +190,7 @@ class VrpGe:
 
             if best_edge:
                 u, v = best_edge
-                G.add_edge(u, v, belongsA=False)
+                G.add_edge(u, v, belongsA=False, visited=False)
             else:
                 break
 
@@ -259,8 +252,7 @@ class VrpGe:
             last_node = route[-1]
             total_km += self.graph[last_node][0]['distance']
 
-        total_m = total_km * 1000.0
-        print(f"{total_km:.2f} km ({total_m:.0f} m)")
+        print(f"{total_km / 1000:.2f} km ({total_km:.0f} m)")
 
 
     def _mutate(self, individual: Individual) -> Individual:
@@ -307,9 +299,11 @@ class VrpGe:
                     dist_m = nx.shortest_path_length(
                         self.travel_data, self.real_nodes[i], self.real_nodes[j], weight='length'
                     )
-                    dist_km = dist_m / 1000.0
-                    time_min = (dist_km / self.vehicle_properties['speed']) * 60
-                    self.graph.add_edge(i, j, distance=dist_km, travel_time=time_min)
+                    dist_m = float(dist_m)
+                    speed_m_min = (self.vehicle_properties['speed'] * 1000) / 60
+                    time_min = dist_m / speed_m_min
+
+                    self.graph.add_edge(i, j, distance=dist_m, travel_time=time_min)
                 except nx.NetworkXNoPath:
                     print(f"No path: {i} -> {j}")
         print(f"Graph ready. Nodes: {len(self.graph.nodes)}, Edges: {len(self.graph.edges)}")
