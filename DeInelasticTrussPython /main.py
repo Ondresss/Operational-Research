@@ -26,16 +26,16 @@ def example_pratt_truss():
 
     ls_fun = truss.limit_state
 
-    print("--- Spouštím iterační výpočet HLRF ---")
+    print("--- START ---")
     beta, pf, x_star, u_star = truss.form_hlrf(ls_fun, truss.mus, X_sigma)
 
     print("-" * 30)
-    print(f"Index spolehlivosti beta: {beta:.4f}")
-    print(f"Pravděpodobnost poruchy Pf: {pf:.6e}")
+    print(f"Index B beta: {beta:.4f}")
+    print(f"Propability of failure Pf: {pf:.6e}")
     print("-" * 30)
-    print("Design Point (Nejkritičtější hodnoty):")
+    print("Critical values:")
     for i, name in enumerate(truss.names):
-        print(f"  {name}: {x_star[i]:.2f} (průměr byl {truss.mus[i]:.2f})")
+        print(f"  {name}: {x_star[i]:.2f} (mean is {truss.mus[i]:.2f})")
 
 
 if __name__ == "__main__":

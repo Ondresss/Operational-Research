@@ -11,7 +11,7 @@ from Depot import Depot
 from Population import Individual, Population
 
 
-class VrpGe:
+class   VrpGe:
     def __init__(self):
         self.nodes = []
         self.graph = nx.Graph()
@@ -127,7 +127,7 @@ class VrpGe:
             while G.degree(current_node) > 2:
                 edges = []
                 for neigh in G.neighbors(current_node):
-                    is_a = G[current_node][neigh].get('belongsA', False)
+                    is_a = G[current_node][neigh]['belongsA']
                     dist = self.graph[current_node][neigh]['distance']
                     edges.append((neigh, is_a, dist))
                 edges.sort(key=lambda x: (x[1], x[2]), reverse=True)
@@ -159,31 +159,19 @@ class VrpGe:
         return G
 
 
-    def _reconnect(self, G, edges_a):
+    def _reconnect(self, G,edges_a):
         while nx.number_connected_components(G) > 1:
             components = list(nx.connected_components(G))
             best_edge = None
             min_dist = float('inf')
 
-            comp_endpoints = []
-
-            for comp in components:
-                endpoints = [n for n in comp if G.degree(n) <= 1]
-
-                if not endpoints:
-                    endpoints = list(comp)
-
-                comp_endpoints.append(endpoints)
-
             for i in range(len(components)):
                 for j in range(i + 1, len(components)):
-                    nodes_i = comp_endpoints[i]
-                    nodes_j = comp_endpoints[j]
-
-                    for n1 in nodes_i:
-                        for n2 in nodes_j:
+                    for n1 in components[i]:
+                        for n2 in components[j]:
+                            if not self.graph.has_edge(n1, n2):
+                                continue
                             dist = self.graph[n1][n2]['distance']
-
                             if dist < min_dist:
                                 min_dist = dist
                                 best_edge = (n1, n2)
@@ -196,63 +184,84 @@ class VrpGe:
 
         return G
 
-    def run(self, iterations):
+    def run(self, iterations,no_pop):
         self.fillNodes()
         self.fillEdges()
 
-        pop_size = 400
+        pop_size = no_pop
         self.population.init_population(pop_size, len(self.nodes) - 1)
         for ind in self.population.population:
             ind.calculate_fitness(self.nodes, self.vehicle_properties, self.graph)
 
         best_fitness = float('inf')
-        no_improve = 0
 
         for current_iter in range(iterations):
-            offspring_size = 50
-            new_children = []
+            self.population.population.sort(key=lambda x: x.fitness)
+            new_population = [self.population.population[0]]
 
-            for _ in range(offspring_size):
+            while len(new_population) < pop_size:
                 p1 = self.get_parent()
                 p2 = self.get_parent()
+
                 child = self.eax(p1, p2)
+
                 if random.random() < 0.3:
                     child = self._mutate(child)
 
                 child.calculate_fitness(self.nodes, self.vehicle_properties, self.graph)
-                new_children.append(child)
-            combined = self.population.population + new_children
-            combined.sort(key=lambda x: x.fitness)
-            self.population.population = combined[:pop_size]
+                new_population.append(child)
 
-            current_best = self.population.population[0].fitness
-            if current_best < best_fitness:
-                best_fitness = current_best
-                self.best_ind = self.population.population[0]
-                no_improve = 0
-                print(f"Iterace {current_iter}: NOVÝ REKORD = {best_fitness:.2f}")
-            else:
-                no_improve += 1
+            self.population.population = new_population
+
+            current_best_ind = self.population.population[0]
+            current_best_fitness = current_best_ind.fitness
+
+            if current_best_fitness < best_fitness:
+                best_fitness = current_best_fitness
+                self.best_ind = current_best_ind
+                print(f"Iteration {current_iter}: NEW BEST FITNESS = {best_fitness:.2f}")
 
             if current_iter % 10 == 0:
-                print(f"Iterace {current_iter}: Best Fitness = {best_fitness:.2f}")
+                print(f"Iteration {current_iter}: Best Fitness = {best_fitness:.2f}")
 
-        total_km = 0.0
+        self.printFinalResult()
+
+
+
+
+    def printFinalResult(self):
+        if not self.best_ind:
+            print("Best individual wasnt found")
+            return
+
+        total_dist_m = 0.0
         route = self.best_ind.route
+        previous_node = 0
 
-        if len(route) > 0:
-            first_node = route[0]
-            total_km += self.graph[0][first_node]['distance']
+        current_capacity = self.vehicle_properties['capacity']
 
-            for i in range(len(route) - 1):
-                u = route[i]
-                v = route[i+1]
-                total_km += self.graph[u][v]['distance']
+        for customer_idx in route:
+            customer = self.nodes[customer_idx]
 
-            last_node = route[-1]
-            total_km += self.graph[last_node][0]['distance']
+            if current_capacity < customer.demand:
+                total_dist_m += self.graph[previous_node][0]['distance']
+                previous_node = 0
+                current_capacity = self.vehicle_properties['capacity']
 
-        print(f"{total_km / 1000:.2f} km ({total_km:.0f} m)")
+            total_dist_m += self.graph[previous_node][customer_idx]['distance']
+            current_capacity -= customer.demand
+            previous_node = customer_idx
+
+        total_dist_m += self.graph[previous_node][0]['distance']
+
+        print("\n" + "="*30)
+        print("Best Individual")
+        print("="*30)
+        print(f"Trasa: {route}")
+        print(f"Fitness: {self.best_ind.fitness:.2f}")
+        print(f"Distance: {total_dist_m / 1000:.2f} km ({total_dist_m:.0f} m)")
+        print("="*30)
+
 
 
     def _mutate(self, individual: Individual) -> Individual:

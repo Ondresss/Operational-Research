@@ -6,12 +6,6 @@ import osmnx as ox
 import matplotlib
 matplotlib.use('Qt5Agg')
 def visualize_interactive_map(vrp, individual):
-    """
-    Vytvoří interaktivní HTML mapu s reálnými cestami po Ostravě,
-    číslovanými zastávkami a animací směru jízdy.
-    """
-    # 1. Inicializace mapy (střed podle depa)
-    # Používáme 'CartoDB positron', aby se předešlo chybě 403 z OpenStreetMap
     depo = vrp.nodes[0]
     m = folium.Map(
         location=[depo.lat, depo.lon],
@@ -46,7 +40,7 @@ def visualize_interactive_map(vrp, individual):
                     pulse_color='white',
                     weight=4,
                     opacity=0.8,
-                    tooltip=f"Úsek {i+1}: {u_idx} -> {v_idx} ({step_dist:.0f} m)"
+                    tooltip=f"Trail {i+1}: {u_idx} -> {v_idx} ({step_dist:.0f} m)"
                 ).add_to(m)
         except Exception as e:
             folium.PolyLine(
@@ -54,18 +48,15 @@ def visualize_interactive_map(vrp, individual):
                 color="orange", weight=2, dash_array='5', opacity=0.5
             ).add_to(m)
 
-    # 3. Značka pro DEPO (Ikona domečku)
     folium.Marker(
         location=[depo.lat, depo.lon],
         popup=f"DEPO (Start/Cíl)",
         icon=folium.Icon(color='black', icon='home', prefix='fa')
     ).add_to(m)
 
-    # 4. Značky pro ZÁKAZNÍKY (Číslované podle pořadí v trase)
     for order, node_idx in enumerate(individual.route, start=1):
         node = vrp.nodes[node_idx]
 
-        # Vlastní HTML ikona pro zobrazení čísla pořadí
         icon_html = f"""
             <div style="
                 font-family: sans-serif; 
@@ -90,7 +81,6 @@ def visualize_interactive_map(vrp, individual):
             popup=f"Zastávka č. {order}<br>Uzel ID: {node_idx}<br>Demand: {getattr(node, 'demand', 'N/A')}"
         ).add_to(m)
 
-    # 5. Přidání infoboxu s celkovou vzdáleností do rohu
     info_html = f'''
         <div style="position: fixed; bottom: 50px; left: 50px; width: 250px; height: 90px; 
                     background-color: white; border:2px solid grey; z-index:9999; font-size:14px;
@@ -103,16 +93,14 @@ def visualize_interactive_map(vrp, individual):
     '''
     m.get_root().html.add_child(folium.Element(info_html))
 
-    # 6. Uložení a dokončení
     output_file = "vrp_final_ostrava.html"
     m.save(output_file)
-    print(f"Mapa byla úspěšně vytvořena: {output_file}")
     return m
 
 
 if __name__ == "__main__":
     alg = VrpGe()
     alg.load("./problem.json")
-    alg.run(2000)
+    alg.run(450,200)
     print(alg.best_ind)
     visualize_interactive_map(alg,alg.best_ind)

@@ -41,6 +41,9 @@ class DETruss:
                 new_individual.evaluate_fitness(self.population.n_panels,self.population.truss)
                 print(f"Current individual - {i} Fitness: {current_individual.fitness},New individual - {i} Fitness: {new_individual.fitness} ")
                 if self.select(current_individual, new_individual):
+                    self.archive.append(current_individual)
+                    if len(self.archive) > self.population.pop_size:
+                        self.archive.pop(random.randint(0, len(self.archive) - 1))
                     delta_f = abs(current_individual.fitness - new_individual.fitness)
                     S_F.append(fi)
                     S_CR.append(cri)
